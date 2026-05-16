@@ -78,7 +78,6 @@ def salvar_venda_callback():
         st.error(f"Erro: {e}")
 
 def salvar_compra_callback():
-    # Cálculo do total antes de salvar
     qtd = st.session_state.compra_qtd
     prc_unit = st.session_state.compra_unitario
     total_calculado = qtd * prc_unit
@@ -183,23 +182,16 @@ elif choice == "Gestão de Estoque (Insumos)":
         else:
             with st.container(border=True):
                 ins_nome = st.selectbox("Selecione o Insumo", df_i['nome'].tolist())
-                st.session_state.compra_insumo_id = int(df_i[df_i['nome'] == ins_nome]['id'].values[0])
+                st.session_state.comp_insumo_id = int(df_i[df_i['nome'] == ins_nome]['id'].values[0])
                 
                 col1, col2, col3 = st.columns(3)
-                # Input de Quantidade
                 qtd_c = col1.number_input("Qtd Comprada", min_value=0.01, step=0.01, key="compra_qtd")
-                # NOVO: Input de Valor Unitário
                 unit_c = col2.number_input("Preço Unitário (R$)", min_value=0.01, step=0.01, key="compra_unitario")
-                # Data
                 dt_c = col3.date_input("Data da Compra", datetime.now(), key="compra_dt")
                 
-                # Cálculo automático para exibição
                 total_preview = qtd_c * unit_c
-                
                 st.write(f"### 💵 Total a Pagar: **R$ {total_preview:,.2f}**")
-                
                 st.text_input("Fornecedor / Local", key="compra_forn")
-                
                 st.button("💾 Salvar Compra", on_click=salvar_compra_callback, use_container_width=True, type="primary")
 
     with t2:
@@ -218,18 +210,72 @@ elif choice == "Gestão de Estoque (Insumos)":
         else:
             st.info("Sem compras.")
 
-# --- ABA 4: GERENCIAR PRODUTOS ---
+# --- ABA 4: GERENCIAR PRODUTOS (CORRIGIDA) ---
 elif choice == "Gerenciar Produtos":
     st.title("📦 Gestão de Produtos")
     tab1, tab2 = st.tabs(["Novo Produto", "Lista e Edição"])
+    
     with tab1:
-        with st.form("cad_p"):
-            n = st.text_input("Nome do Produto")
-            c = st.number_input("Custo de Produção (R$)", min_value=0.0)
-            if st.form_submit_button("Salvar"):
-                with engine.begin() as conn:
-                    conn.execute(text("INSERT INTO produtos (nome, custo_unitario) VALUES (:n, :c)"), {"n":n, "c":c})
-                st.rerun()
+        with st.form("cad_p", clear_on_submit=True):
+            st.subheader("Cadastrar Novo Produto")
+            n = st.text_input("Nome do Produto (Ex: Pudim de Leite Ninho)")
+            c = st.number_input("Custo de Produção (R$)", min_value=0.0, format="%.2f", step=0.50)
+            if st.form_submit_button("Salvar Produto"):
+                if n:
+                    with engine.begin() as conn:
+                        conn.execute(text("INSERT INTO produtos (nome, custo_unitario) VALUES (:n, :c)"), {"n":n, "c":c})
+                    st.success(f"Produto '{n}' adicionado com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("O nome do produto não pode ser vazio.")
+
     with tab2:
-        df_l = run_query("SELECT * FROM produtos ORDER BY nome")
-        st.dataframe(df_l, use_container_width=True)
+        st.subheader("Editar Produtos")
+        st.info("Dica: Clique duas vezes na célula para editar. Depois clique no botão salvar abaixo.")
+        
+        # Buscar produtos do banco
+        df_l = run_query("SELECT id, nome, custo_unitario FROM produtos ORDER BY id")
+        
+        if not df_l.empty:
+            # Interface de Edição
+            df_editado = st.data_editor(
+                df_l,
+                key="editor_produtos_pudim",
+                use_container_width=True,
+                disabled=["id"], # ID não se mexe
+                hide_index=True,
+                column_config={
+                    "id": "ID",
+                    "nome": "Nome do Pudim/Produto",
+                    "custo_unitario": st.column_config.NumberColumn("Custo (R$)", format="R$ %.2f")
+                }
+            )
+
+            col1, col2 = st.columns([1, 4])
+            if col1.button("💾 Salvar Alterações", type="primary"):
+                try:
+                    with engine.begin() as conn:
+                        for index, row in df_editado.iterrows():
+                            conn.execute(
+                                text("UPDATE produtos SET nome = :n, custo_unitario = :c WHERE id = :id"),
+                                {"n": row['nome'], "c": row['custo_unitario'], "id": row['id']}
+                            )
+                    st.toast("Produtos atualizados!", icon="✅")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
+
+            # Opção para excluir
+            with st.expander("🗑️ Excluir Produto"):
+                prod_del = st.selectbox("Selecione para remover", df_l['nome'].tolist())
+                id_del = df_l[df_l['nome'] == prod_del]['id'].values[0]
+                if st.button(f"Confirmar Exclusão de {prod_del}"):
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text("DELETE FROM produtos WHERE id = :id"), {"id": int(id_del)})
+                        st.success("Produto removido!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error("Não é possível remover: este produto já possui vendas vinculadas.")
+        else:
+            st.info("Nenhum produto cadastrado.")
